@@ -1,7 +1,7 @@
 {
   "name": "Pistol Fight",
   "short_name": "Pistol Fight",
-  "start_url": "./pistol-fight.html",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#87CEEB",
   "theme_color": "#1565C0",
