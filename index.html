@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1565C0">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Pistol Fight</title>
+<style>
+  body { margin:0; background:#87CEEB; font-family:Arial,sans-serif; display:flex; flex-direction:column; align-items:center; min-height:100vh; overflow:hidden; touch-action:none; }
+  h1 { margin:6px 0 2px; font-size:20px; color:#1565C0; }
+  canvas { border:4px solid #222; max-width:100%; height:auto; }
+  #ui { margin:4px; font-size:13px; font-weight:bold; text-align:center; }
+  #controls { display:flex; flex-wrap:wrap; gap:5px; justify-content:center; margin:6px; max-width:760px; }
+  button { padding:9px 11px; font-size:13px; font-weight:bold; border:none; border-radius:8px; color:white; cursor:pointer; user-select:none; }
+  .move { background:#1976D2; }
+  .action { background:#D32F2F; }
+  .jump { background:#7B1FA2; }
+  .car { background:#F57C00; display:none; }
+  .restart { background:#388E3C; }
+</style>
+</head>
+<body>
+<h1>Pistol Fight</h1>
+<div id="ui">
+  Värld: <span id="world">Hus</span> &nbsp;|&nbsp;
+  Level: <span id="level">1</span>/2000 &nbsp;|&nbsp;
+  Poäng: <span id="score">0</span> &nbsp;|&nbsp;
+  Coins: <span id="coins">0</span> &nbsp;|&nbsp;
+  <span id="mode">Till fots</span>
+</div>
+<canvas id="game" width="640" height="400"></canvas>
+<div id="controls">
+  <button class="move" id="left">← Vänster</button>
+  <button class="move" id="right">Höger →</button>
+  <button class="move" id="forward">Framåt</button>
+  <button class="move" id="back">Bakåt</button>
+  <button class="move" id="walk">Gå</button>
+  <button class="move" id="run">Spring</button>
+  <button class="jump" id="jump">Hoppa högt</button>
+  <button class="action" id="shootF">🔫 Skjut fram</button>
+  <button class="action" id="shootB">🔫 Skjut bak</button>
+  <button class="car" id="drive">🚗 Kör bil</button>
+  <button class="restart" id="restart">Starta om</button>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const worldEl = document.getElementById('world');
+const levelEl = document.getElementById('level');
+const scoreEl = document.getElementById('score');
+const coinsEl = document.getElementById('coins');
+const modeEl = document.getElementById('mode');
+const driveBtn = document.getElementById('drive');
+
+let level=1, score=0, coins=0, gameOver=false;
+let hasCar=false, driving=false;
+let worldOffset=0;
+const worlds = ['Hus','Skog','Nordpolen','Sverige','Kina'];
+let currentWorld=0;
+
+const player = { x:320, y:300, baseY:300, speed:2.5, running:false, facing:1, jumping:false, jumpVel:0 };
+let enemies=[], bullets=[], coinsArr=[], cars=[], goodPeople=[];
+let keys = {left:false,right:false,forward:false,back:false};
+
+function bindHold(id,k){
+  const b=document.getElementById(id);
+  const d=()=>keys[k]=true, u=()=>keys[k]=false;
+  b.addEventListener('mousedown',d); b.addEventListener('mouseup',u); b.addEventListener('mouseleave',u);
+  b.addEventListener('touchstart',e=>{e.preventDefault();d();});
+  b.addEventListener('touchend',e=>{e.preventDefault();u();});
+}
+bindHold('left','left'); bindHold('right','right'); bindHold('forward','forward'); bindHold('back','back');
+
+document.getElementById('walk').onclick=()=>player.running=false;
+document.getElementById('run').onclick=()=>player.running=true;
+document.getElementById('jump').onclick=()=>{
+  if(!player.jumping && !driving && !gameOver){
+    player.jumping=true;
+    player.jumpVel=-14; // högt hopp
+  }
+};
+driveBtn.onclick=()=>{ if(hasCar){ driving=!driving; modeEl.textContent=driving?'Kör bil':'Till fots'; } };
+
+function shoot(dir){
+  if(gameOver) return;
+  if(driving){
+    // två vapen från fönstren
+    bullets.push({x:player.x-20, y:player.y-30, vx:dir*6, vy:0, dmg:2, r:4, fromCar:true});
+    bullets.push({x:player.x+20, y:player.y-30, vx:dir*6, vy:0, dmg:2, r:4, fromCar:true});
+  } else {
+    bullets.push({x:player.x + dir*18, y:player.y-40, vx:dir*7, vy:0, dmg:2, r:5});
+  }
+}
+document.getElementById('shootF').onclick=()=>shoot(1);
+document.getElementById('shootB').onclick=()=>shoot(-1);
+
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); shoot(player.facing); }
+  if(e.key==='ArrowLeft'||e.key==='a') keys.left=true;
+  if(e.key==='ArrowRight'||e.key==='d') keys.right=true;
+  if(e.key==='ArrowUp'||e.key==='w') keys.forward=true;
+  if(e.key==='ArrowDown'||e.key==='s') keys.back=true;
+});
+document.addEventListener('keyup',e=>{
+  if(e.key==='ArrowLeft'||e.key==='a') keys.left=false;
+  if(e.key==='ArrowRight'||e.key==='d') keys.right=false;
+  if(e.key==='ArrowUp'||e.key==='w') keys.forward=false;
+  if(e.key==='ArrowDown'||e.key==='s') keys.back=false;
+});
+
+function spawnEnemy(){
+  const type = currentWorld===2?'polar':(currentWorld===1?'bear':'person');
+  enemies.push({
+    x: Math.random()<0.5?-40:canvas.width+40,
+    y:310,
+    vx:(Math.random()<0.5?1:-1)*(1.2+level*0.003),
+    hp:3+Math.floor(level/120),
+    type,
+    good:false
+  });
+}
+function spawnGoodPerson(){
+  goodPeople.push({
+    x:100+Math.random()*(canvas.width-200),
+    y:310,
+    vx:(Math.random()-0.5)*0.4,
+    free:false
+  });
+}
+function spawnCoin(){ coinsArr.push({x:60+Math.random()*(canvas.width-120), y:160+Math.random()*100}); }
+function spawnCar(){
+  if(currentWorld===0||currentWorld===3){
+    cars.push({x:Math.random()<0.5?-100:canvas.width+100, y:325, vx:(Math.random()<0.5?1:-1)*(2+Math.random()), color:['#E53935','#1E88E5','#43A047'][Math.floor(Math.random()*3)]});
+  }
+}
+
+function getWorld(){
+  if(worldOffset<900) return 0;
+  if(worldOffset<2000) return 1;
+  if(worldOffset<3100) return 2;
+  if(worldOffset<4300) return 3;
+  return 4;
+}
+
+function updateUI(){
+  currentWorld=getWorld();
+  worldEl.textContent=worlds[currentWorld];
+  levelEl.textContent=level;
+  scoreEl.textContent=score;
+  coinsEl.textContent=coins;
+  modeEl.textContent=driving?'Kör bil':'Till fots';
+  if(coins>=10 && !hasCar){ hasCar=true; driveBtn.style.display='inline-block'; }
+}
+
+let se=0,sg=0,sc=0,scar=0,lt=0;
+function update(){
+  if(gameOver) return;
+  lt++; if(lt>200 && level<2000){ level++; lt=0; }
+
+  const spd=(player.running?1.8:1)*(driving?3.4:player.speed);
+  if(keys.forward) worldOffset += spd*1.2;
+  if(keys.back) worldOffset=Math.max(0,worldOffset-spd*0.6);
+  if(keys.left){ player.x-=spd; player.facing=-1; }
+  if(keys.right){ player.x+=spd; player.facing=1; }
+  player.x=Math.max(40,Math.min(canvas.width-40,player.x));
+
+  if(player.jumping){
+    player.y+=player.jumpVel; player.jumpVel+=0.42;
+    if(player.y>=player.baseY){ player.y=player.baseY; player.jumping=false; }
+  }
+
+  se++; if(se>Math.max(48-currentWorld*1.5,14)){ spawnEnemy(); se=0; }
+  sg++; if(sg>280){ spawnGoodPerson(); sg=0; }
+  sc++; if(sc>120){ spawnCoin(); sc=0; }
+  scar++; if(scar>95){ spawnCar(); scar=0; }
+
+  enemies.forEach((e,i)=>{
+    e.x+=e.vx;
+    if(!driving && Math.abs(e.x-player.x)<28 && Math.abs(e.y-player.y)<38) gameOver=true;
+    if(e.x<-90||e.x>canvas.width+90) enemies.splice(i,1);
+  });
+  goodPeople.forEach((g,i)=>{
+    g.x+=g.vx;
+    if(g.x<40||g.x>canvas.width-40) g.vx*=-1;
+  });
+  cars.forEach((c,i)=>{
+    c.x+=c.vx;
+    if(!driving && Math.abs(c.x-player.x)<40 && Math.abs(c.y-player.y)<26) gameOver=true;
+    if(c.x<-130||c.x>canvas.width+130) cars.splice(i,1);
+  });
+  bullets.forEach((b,i)=>{
+    b.x+=b.vx;
+    // träffa fiender
+    enemies.forEach((e,ei)=>{
+      if(Math.abs(b.x-e.x)<24 && Math.abs(b.y-(e.y-22))<30){
+        e.hp-=b.dmg; bullets.splice(i,1);
+        if(e.hp<=0){ enemies.splice(ei,1); score+=8; }
+      }
+    });
+    // träffa goda personer → de blir fria och går hem
+    goodPeople.forEach((g,gi)=>{
+      if(Math.abs(b.x-g.x)<22 && Math.abs(b.y-(g.y-20))<28){
+        g.free=true;
+        bullets.splice(i,1);
+        score-=5; // straff om man skjuter god person
+      }
+    });
+    if(b.x<-30||b.x>canvas.width+30) bullets.splice(i,1);
+  });
+  // fria personer går mot hus / försvinner
+  goodPeople.forEach((g,i)=>{
+    if(g.free){
+      g.x += (g.x < canvas.width/2 ? -1.2 : 1.2);
+      if(g.x< -20 || g.x>canvas.width+20) goodPeople.splice(i,1);
+    }
+  });
+  coinsArr.forEach((c,i)=>{
+    if(Math.abs(c.x-player.x)<26 && Math.abs(c.y-player.y)<36){
+      coins++; coinsArr.splice(i,1); updateUI();
+    }
+  });
+  updateUI();
+}
+
+function drawBackground(){
+  const w=currentWorld;
+  ctx.fillStyle = w===2?'#E3F2FD':w===4?'#FFF8E1':'#87CEEB';
+  ctx.fillRect(0,0,canvas.width,250);
+
+  ctx.fillStyle = w===1?'#2E7D32':w===2?'#ECEFF1':w===4?'#A1887F':'#66BB6A';
+  ctx.fillRect(0,300,canvas.width,100);
+
+  if(w===0||w===3){
+    ctx.fillStyle='#616161';
+    ctx.fillRect(0,345,canvas.width,55);
+    ctx.strokeStyle='#FFF'; ctx.setLineDash([12,8]); ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(0,372); ctx.lineTo(canvas.width,372); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Hus på båda sidor så man kan gå mellan dem
+  if(w===0){
+    for(let i=0;i<4;i++){
+      const hx = ((i*170 - worldOffset*0.45)%(canvas.width+100))-20;
+      // vänster hus
+      drawNiceHouse(hx-80, 150);
+      // höger hus
+      drawNiceHouse(hx+120, 150);
+    }
+  }
+  if(w===1){
+    for(let i=0;i<6;i++){
+      const tx=((i*120-worldOffset*0.5)%(canvas.width+60));
+      ctx.fillStyle='#1B5E20';
+      ctx.beginPath(); ctx.moveTo(tx,290); ctx.lineTo(tx+18,170); ctx.lineTo(tx+36,290); ctx.fill();
+      ctx.fillStyle='#795548'; ctx.fillRect(tx+14,275,8,25);
+    }
+  }
+  if(w===2){
+    for(let i=0;i<5;i++){
+      const ix=((i*150-worldOffset*0.3)%(canvas.width+80));
+      ctx.fillStyle='#B0BEC5';
+      ctx.beginPath(); ctx.moveTo(ix,290); ctx.lineTo(ix+25,190); ctx.lineTo(ix+50,290); ctx.fill();
+    }
+  }
+  if(w===3){
+    ctx.fillStyle='#005293'; ctx.fillRect(30,30,70,44);
+    ctx.fillStyle='#FECC00'; ctx.fillRect(30,46,70,12); ctx.fillRect(52,30,12,44);
+  }
+  if(w===4){
+    ctx.fillStyle='#DE2910'; ctx.fillRect(510,25,60,38);
+    ctx.fillStyle='#FFDE00';
+    for(let s=0;s<5;s++){ ctx.beginPath(); ctx.arc(525+s*8,40,3.5,0,Math.PI*2); ctx.fill(); }
+  }
+}
+
+function drawNiceHouse(x,y){
+  ctx.fillStyle='#D7CCC8';
+  ctx.fillRect(x,y,70,95);
+  ctx.fillStyle='#5D4037';
+  ctx.beginPath(); ctx.moveTo(x-6,y); ctx.lineTo(x+35,y-35); ctx.lineTo(x+76,y); ctx.fill();
+  ctx.fillStyle='#6D4C41';
+  ctx.fillRect(x+26,y+50,18,45);
+  ctx.fillStyle='#81D4FA';
+  ctx.fillRect(x+10,y+18,18,18);
+  ctx.fillRect(x+42,y+18,18,18);
+  ctx.strokeStyle='#FFF'; ctx.lineWidth=1.5;
+  ctx.strokeRect(x+10,y+18,18,18); ctx.strokeRect(x+42,y+18,18,18);
+}
+
+function drawPlayer(){
+  ctx.save();
+  ctx.translate(player.x,player.y);
+  if(player.facing===-1) ctx.scale(-1,1);
+  if(driving){
+    ctx.fillStyle='#1565C0';
+    ctx.fillRect(-32,-20,64,26);
+    ctx.fillStyle='#0D47A1';
+    ctx.fillRect(-26,-36,52,18);
+    ctx.fillStyle='#B3E5FC';
+    ctx.fillRect(-22,-32,44,12);
+    ctx.fillStyle='#212121';
+    ctx.fillRect(-34,-4,10,12); ctx.fillRect(24,-4,10,12);
+    // två vapen synliga i fönstren
+    ctx.fillStyle='#333';
+    ctx.fillRect(-18,-28,8,4);
+    ctx.fillRect(10,-28,8,4);
+  } else {
+    ctx.fillStyle='#1976D2';
+    ctx.fillRect(-14,-46,28,40);
+    ctx.fillStyle='#FFCC80';
+    ctx.beginPath(); ctx.arc(0,-58,13,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#4E342E';
+    ctx.beginPath(); ctx.arc(0,-62,11,Math.PI,0); ctx.fill();
+    ctx.strokeStyle='#1565C0'; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.moveTo(14,-30); ctx.lineTo(22,-6); ctx.stroke();
+    ctx.fillStyle='#212121';
+    ctx.fillRect(18,-12,16,6);
+  }
+  ctx.restore();
+}
+
+function drawEnemy(e){
+  ctx.save(); ctx.translate(e.x,e.y);
+  if(e.type==='polar'){
+    ctx.fillStyle='#FFF';
+    ctx.beginPath(); ctx.ellipse(0,-14,20,16,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0,-34,11,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.arc(-3,-36,2,0,Math.PI*2); ctx.arc(3,-36,2,0,Math.PI*2); ctx.fill();
+  } else if(e.type==='bear'){
+    ctx.fillStyle='#6D4C41';
+    ctx.beginPath(); ctx.ellipse(0,-12,18,14,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0,-30,10,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.arc(-3,-32,1.8,0,Math.PI*2); ctx.arc(3,-32,1.8,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillStyle='#78909C';
+    ctx.fillRect(-10,-38,20,36);
+    ctx.fillStyle='#FFCC80';
+    ctx.beginPath(); ctx.arc(0,-50,11,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.arc(-3,-52,2,0,Math.PI*2); ctx.arc(3,-52,2,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#000'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(0,-46,4,0.2,Math.PI-0.2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawGoodPerson(g){
+  ctx.save(); ctx.translate(g.x,g.y);
+  ctx.fillStyle=g.free?'#81C784':'#FFB74D';
+  ctx.fillRect(-9,-36,18,34);
+  ctx.fillStyle='#FFCC80';
+  ctx.beginPath(); ctx.arc(0,-48,10,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.arc(-3,-50,1.8,0,Math.PI*2); ctx.arc(3,-50,1.8,0,Math.PI*2); ctx.fill();
+  if(g.free){
+    ctx.fillStyle='#388E3C';
+    ctx.font='10px Arial'; ctx.textAlign='center';
+    ctx.fillText('Fri!',0,-60);
+  }
+  ctx.restore();
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawBackground();
+
+  coinsArr.forEach(c=>{
+    ctx.fillStyle='#FFD700';
+    ctx.beginPath(); ctx.arc(c.x,c.y,8,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#333'; ctx.font='10px Arial'; ctx.textAlign='center'; ctx.fillText('$',c.x,c.y+3);
+  });
+  cars.forEach(c=>{
+    ctx.fillStyle=c.color;
+    ctx.fillRect(c.x-24,c.y-16,48,22);
+    ctx.fillStyle='#B3E5FC';
+    ctx.fillRect(c.x-16,c.y-28,32,14);
+    ctx.fillStyle='#212121';
+    ctx.fillRect(c.x-28,c.y-4,8,10); ctx.fillRect(c.x+20,c.y-4,8,10);
+  });
+  goodPeople.forEach(drawGoodPerson);
+  enemies.forEach(drawEnemy);
+  bullets.forEach(b=>{
+    ctx.fillStyle=b.fromCar?'#FFEB3B':'#FFF';
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+  });
+  drawPlayer();
+
+  if(gameOver){
+    ctx.fillStyle='rgba(0,0,0,0.75)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='#FFF'; ctx.font='bold 24px Arial'; ctx.textAlign='center';
+    ctx.fillText('GAME OVER',canvas.width/2,canvas.height/2-15);
+    ctx.font='15px Arial';
+    ctx.fillText('Level '+level+'  Poäng: '+score,canvas.width/2,canvas.height/2+12);
+  }
+}
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+function reset(){
+  level=1; score=0; coins=0; gameOver=false; hasCar=false; driving=false;
+  worldOffset=0; enemies=[]; bullets=[]; coinsArr=[]; cars=[]; goodPeople=[];
+  player.x=320; player.y=player.baseY; player.jumping=false;
+  driveBtn.style.display='none';
+  updateUI();
+}
+document.getElementById('restart').onclick=reset;
+loop();
+</script>
+</body>
+</html>
